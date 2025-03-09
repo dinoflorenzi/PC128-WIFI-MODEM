@@ -1,3 +1,0 @@
-Manifest-Version: 1.0
-Main-Class: BotServer5
-Class-Path: mysql-connector-j-8.1.0.jar
