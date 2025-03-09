@@ -2,11 +2,12 @@
 #include "cmoc.h"
 #define BUFFERRX_SIZE 255
 #define BUFFERTX_SIZE 128
-#define NCOMM 5
+#define NCOMM 7
 #define MAXERR 100
+#define debug *((char*)0xafff)=0
 
 char ch;
-unsigned short rxPos,dwSize,delvar=1500;
+unsigned short rxPos,dwSize,delvar=500;
 unsigned char ret_cts;
 char * buffer;
 //char * bufferRx=(char*) 0x6000;
@@ -20,11 +21,17 @@ char esc=0;
 unsigned short index = 0;
  char bufferTx[BUFFERTX_SIZE+1];
 
-char *commlist[]={"upload","download","type","delay","basic"};
-char *commusage[]={"Nomefile Start Size Exec Bank\n","FILE/FILE START BANK\n","Nomefile","uSec/10",""};
-char commnpar[]={5,1,1,1,0} ;
-void (*commptr[])(char**) ={upload,download,type,setdelay,basic};
+char *commlist[]={"upload","download","type","delay","basic","loadbas","loadimg"};
+char *commusage[]={"Nomefile Start Size Exec Bank\n\r","FILE/FILE START BANK\n\r","Nomefile\n\r","uSec/10\n\r","Nomefile\n\r","Nomefile\n\r"};
+char commnpar[]={5,1,1,1,0,1,1} ;
+void (*commptr[])(char**) ={upload,download,type,setdelay,basic,loadbas,loadgame};
 void upload(char **);
+void download(char **);
+void basic(char **);
+void setdelay(char **);
+void type(char**);
+void loadbas(char**);
+void loadgame(char**);
 void printBuffer(char *, unsigned short);
 
 void basic(char ** params)
@@ -34,6 +41,8 @@ void basic(char ** params)
 		RTS
 	}
 }
+
+
 void delay(unsigned short n)	// 	n * 10 uSec
 {
 	if(n==0)return;
@@ -255,7 +264,7 @@ unsigned short serial_rx(char* buf, unsigned short len)
 	 LEAY D,X
 	 PSHS Y
 START
-	 LDY #$01FF
+	 LDY #$02FF
 LOOP
 	 LDA $A7CC     
 	 ANDA #$40
@@ -320,7 +329,6 @@ EXIT2
 	 PULS X,Y,D
 	}
 		unsigned short size=(unsigned short) (res-buf);
-	buf[size]='\0';
 
 	return size;
 }
@@ -385,7 +393,7 @@ void strsplit(char * comm)
 	else
 	{
 		commptr[ncom](params);
-		*((char*)0xafff)=0;
+		debug;
 	}
 }
 
@@ -444,6 +452,7 @@ while(i<nblk&&err<MAXERR)
       start +=blksize;
 }
 	setbank(oldbank);
+	if(err==MAXERR)printf("errore di trasmissione\n\r");
 }
 
 void download(char ** params)
@@ -452,26 +461,103 @@ void download(char ** params)
 		dwSize=atoi(params[3]);	
 		char bank =(char)  atoi(params[4]);
 		char oldbank=setbank(bank);
-		unsigned short total=0;
+		unsigned short total=0,count=0,count2=0,timeout=0;
 		char ACK=0x06;
 		char NAK=0x15;
+		char CNT=0x0a;
 		char err=0;
-	while((total<dwSize)&&(err<40))
+		char chkr;
+	while((total<dwSize)&&(err<40)&&(timeout<100))
 	{
 	  delay(delvar);
-	  check_CTS();
-      RTS_ON();
-     unsigned short count= serial_rx(start,129);
-      RTS_OFF();
-	  if(count>0)
+	  if(count==0)
 	  {
-		  char chks = chkscalc(start,count-1);
-		  char chkr = start[count-1];
+		  check_CTS();
+		  RTS_ON();
+		  count= serial_rx(start,128);
+		  RTS_OFF();
+		  serial_tx(&CNT,1);
+	  }
+	  
+	if(count2==0 && count>0)
+	  {
+
+		check_CTS();
+		RTS_ON();
+		count2= serial_rx(&chkr,1);
+		RTS_OFF();
+	  }
+	  if(count>0 && count2>0)
+	  {
+		  char chks = chkscalc(start,count);
+
+	  	  //printf("%d %d-",chks,chkr);
 		  delay(delvar);
 		  if(chks==chkr)
 		  {
-			start+=count-1;
-			total+=count-1;
+			start+=count;
+			total+=count;
+			serial_tx(&ACK,1);
+
+		  }
+		  else
+		  {
+			serial_tx(&NAK,1);  
+			err++;
+		  }
+		  count=0;
+		  count2=0;
+	  }
+	  else timeout++;
+	}
+	setbank(oldbank);
+	if(err==40)printf("errore di ricezione\n\r");
+	if(timeout==100)printf("Timeout!!!!\n\r");
+
+}
+void loadbas(char ** params)
+{
+
+		dwSize=0x4000;	
+		char oldbank=setbank(2);
+		unsigned short total=0,timeout=0,count=0,count2=0;
+		char ACK=0x06;
+		char NAK=0x15;
+		char CNT=0x0a;
+		char err=0;
+		char chkr;
+	for(unsigned short i=2;i<8;i++)
+	{
+	setbank(i);
+	char * start =(char *) 0x6000;
+	while((total<dwSize)&&(err<40))
+	{
+	  delay(delvar);
+	  if(count==0)
+	  {
+		  check_CTS();
+		  RTS_ON();
+		  count= serial_rx(start,128);
+		  RTS_OFF();  
+		  serial_tx(&CNT,1);
+	  }
+	  if(count2==0 && count>0)
+	  {
+		  check_CTS();
+		  RTS_ON();
+		  count2= serial_rx(&chkr,1);
+		  RTS_OFF();  
+	  }
+
+	  if(count>0 && count2>0)
+	  {
+		  timeout=0;
+		  char chks = chkscalc(start,count);
+		  delay(delvar);
+		  if(chks==chkr)
+		  {
+			start+=count;
+			total+=count;
 			serial_tx(&ACK,1);
 		  }
 		  else
@@ -479,37 +565,203 @@ void download(char ** params)
 			serial_tx(&NAK,1);  
 			err++;
 		  }
+		count=0;
+		count2=0;
 	  }
+	  else timeout++;
+	  if(timeout>100)break;
 	}
+	  if(timeout>100)break;
+	}
+		setbank(oldbank);
 	if(err==40)printf("errore di ricezione\n\r");
-	setbank(oldbank);
-}
 
+}
 void type(char ** params)
 { 
 
-		unsigned short timeout=0;
+		unsigned short timeout=0,count =0, count2=0;
 		char ACK=0x06;
 		char NAK=0x15;
+		char CNT=0x0a;
 		char err=0;
-		
-	while(err<40 && timeout<40)
+		char chkr;
+	while(err<40 && timeout<100)
 	{
-	  check_CTS();
-      RTS_ON();
-     unsigned short count= serial_rx(RXbuffer,129);
-      RTS_OFF();
-	  if(count>0)
+		if(count==0)
+		{
+			check_CTS();
+			RTS_ON();
+			count= serial_rx(RXbuffer,128);
+			RTS_OFF();
+			serial_tx(&CNT,1);	
+					
+		}
+		if(count2==0 && count>0)
+		{
+			check_CTS();
+			RTS_ON();
+			count2= serial_rx(&chkr,1);
+			RTS_OFF();
+		}
+	  if(count>0 && count2>0)
 	  {
-		printBuffer(RXbuffer,count-1);
+		printBuffer(RXbuffer,count);
 		serial_tx(&ACK,1); 
 		timeout=0;
+		count =0;
+		count2 =0;
 	  }
 	  else timeout++;
-
+	if(timeout==40) break;
 		
 	}
-	if(err==40 || timeout==40)printf("errore di ricezione\n\r");
+	if(err==40 || timeout==100)printf("errore di ricezione\n\r");
+}
+
+void CTS_ASM()
+{
+	asm
+	{
+	LDX #$FFFF
+LOOP4
+	LEAX -1,X
+	BEQ EXIT3
+	LDA $A7CC
+	ANDA #$20
+	BEQ LOOP4
+EXIT3
+	}
+}
+void dummyTX()
+{
+	asm
+	{
+	LDA #$00
+	STA $A7CC
+	LDB #10
+LOOP3
+	DECB
+	BNE LOOP3
+	LDA #$80
+	STA $A7CC
+	}
+}
+
+void loadgame(char ** params)
+{
+	delay(500000);
+	asm
+	{
+		ORCC #$50
+		LDS #$1FFF
+		LDA #0
+		STA $A7E5
+		LDA $A7C0
+		ORA #$01
+		STA $A7C0
+		LDA #$10
+		STA $A7DD
+		JMP $7600,PC
+	}
+	
+	CTS_ASM();
+	RTS_ON();
+	serial_rx(0x1f40,23);     //cc,d,dp,x,y,u,pc
+	RTS_OFF();
+	
+	dummyTX();
+	CTS_ASM();
+	RTS_ON();
+	serial_rx(24576,16192);
+	RTS_OFF();
+	asm
+	{
+		LDA #1
+		STA $A7E5
+	}
+	dummyTX();
+	CTS_ASM();
+	RTS_ON();
+	serial_rx(24576,16384);
+	RTS_OFF();
+	asm
+	{
+		LDA #2
+		STA $A7E5
+	}
+	dummyTX();
+	CTS_ASM();
+	RTS_ON();
+	serial_rx(24576,16384);
+	RTS_OFF();
+	asm
+	{
+		LDA #3
+		STA $A7E5
+	}
+	dummyTX();
+	CTS_ASM();
+	RTS_ON();
+	serial_rx(24576,16384);	
+	RTS_OFF();
+	asm
+	{
+		LDA #4
+		STA $A7E5
+	}
+	dummyTX();
+	CTS_ASM();
+	RTS_ON();
+	serial_rx(24576,16384);
+	RTS_OFF();
+	asm
+	{
+		LDA #5
+		STA $A7E5
+	}
+	dummyTX();
+	CTS_ASM();
+	RTS_ON();
+	serial_rx(24576,16384);
+	RTS_OFF();
+	asm
+	{
+		LDA #6
+		STA $A7E5
+	}
+	dummyTX();
+	CTS_ASM();
+	RTS_ON();
+	serial_rx(24576,16384);
+	RTS_OFF();
+	asm
+	{
+		LDA #7
+		STA $A7E5
+	}
+	dummyTX();
+	CTS_ASM();
+	RTS_ON();
+	serial_rx(24576,16384);
+	RTS_OFF();
+	
+	asm
+	{
+	LDD $1F4B
+	ORA #$01
+	STA $A7C0
+	STB $A7E5
+	LDX $1F4F
+	LDY $1F51
+	LDS $1F53
+	LDU $1F55
+	LDD $1F4D
+	TFR A,DP
+	TFR B,CC
+	STA $AFFF
+	JMP $1F40
+	}
 }
 
 void printBuffer(char *bufferRx, unsigned short size )
@@ -549,8 +801,9 @@ void printBuffer(char *bufferRx, unsigned short size )
 // RTS HIGH to send data - wait CTS LOW
 int main()
 {	
+	PUTCH(17);
 	PUTCH(12);
-	PRINT("PC128 WIFI MODEM 19200 BAUD 1.2");
+	PRINT("PC128 WIFI MODEM 19200 BAUD 1.3");
 	PUTCH(10);
 	PUTCH(13);
 	serial_init();

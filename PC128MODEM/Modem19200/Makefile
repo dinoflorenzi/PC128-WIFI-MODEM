@@ -21,4 +21,5 @@ mo5_ex1:
 
 	mv ./modem.bin $(BUILD_PATH)
 	mv ./cart.rom $(BUILD_PATH)
-	mv ./modem.k7 $(BUILD_PATH)
+	mv ./modem.k7 $(BUILD_PATH)/modem2.k7
+	cat $(BUILD_PATH)/starter.k7 $(BUILD_PATH)/modem2.k7 > $(BUILD_PATH)/modem.k7
