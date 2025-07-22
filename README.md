@@ -10,3 +10,7 @@ Dopodiché il modem sarà in modalità comandi AT (vedi guida COMANDI AT).
 Digitando il comando ATDS9 il modem si connette alla pseudo BBS.
 A connessione avvenuta è necessario accedere con login e password. Nel caso di prima registrazione procedere con il comando register user password ed attendere l' abilitazione.
 Digitare HELP per l' elenco dei comandi.
+# COMANDI AT
+at$ssid=ssid_della_rete_wifi_in_minuscolo
+at$pass=password_della_rete_wifi_in_minuscolo
+at&w - scrittura credenziali in memoria
