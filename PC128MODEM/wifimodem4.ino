@@ -32,8 +32,15 @@
 #include <ESP8266HTTPClient.h>
 #include <ArduinoOTA.h>
 #include <Updater.h>
+#include <WiFiClientSecure.h>
+#include <ESP8266httpUpdate.h>
 
-const String CURRENT_VERSION = "1.1";  // Versione attuale
+#define FW_VERSION 1
+
+// Link raw GitHub
+const char* version_url = "https://raw.githubusercontent.com/dinoflorenzi/PC128-WIFI-MODEM/main/version.txt";
+const char* bin_url     = "https://raw.githubusercontent.com/dinoflorenzi/PC128-WIFI-MODEM/main/firmware.bin";
+
 
 // These translation tables are not used yet.
 static unsigned char petToAscTable[256] = {
@@ -118,6 +125,7 @@ static unsigned char ascToPetTable[256] = {
 
 // Global variables
 uint16_t rxCount=0;
+int i=0;
 String build = "20231104181700";
 String cmd = "";           // Gather a new AT command to this string from serial
 bool cmdMode = true;       // Are we in AT command mode or connected mode
@@ -178,56 +186,56 @@ static inline int32_t asm_ccount(void) {
     return r;
 }
 
-void updateFirmware(String curr) {
-waitCTS();
-  Serial.println("Connessione al server per l'aggiornamento...");
-  if (tcpClient.connect("fi5.bot-hosting.net",22720)) {
-waitCTS();
-    Serial.println("Connesso al server, richiedo il firmware...");
+void checkUpdate() {
+  WiFiClientSecure client;
+  client.setInsecure(); // ok per raw.githubusercontent.com
 
-    tcpClient.println("CHECK_FIRMWARE");  // Invia un comando per richiedere il firmware
+  // Scarica version.txt
+  HTTPClient http;
+  String url = String(version_url) + "?t=" + String(millis());
+  http.begin(client, url);
+  int httpCode = http.GET();
+  if(httpCode != 200) {
+    waitCTS();
+    Serial.printf("Errore versione HTTP %d\n", httpCode);
+    http.end();
+    return;
+  }
 
-    // Attendi la risposta del server
-String line;
- while(tcpClient.available()){
-    line = tcpClient.readStringUntil('\r');
-}
-  Serial.println("versioni "+line+"   "+curr);
-if(line!=curr)
-{
-tcpClient.println("GET_FIRMWARE");  // Invia un comando per richiedere il firmware
+  String remoteVersionStr = http.getString();
+  http.end();
+  remoteVersionStr.trim();
+  int remoteVersion = remoteVersionStr.toInt();
+  waitCTS();
+  Serial.printf("Versione remota: %d\n", remoteVersion);
 
-    // Attendi la risposta del server
-    while (!tcpClient.available()) {
-      delay(1);
-    }
-//waitCTS();
-    //Serial.println("Ricezione del firmware in corso...");
-    if (Update.begin(600000)) {  // Prepara la memoria per l'aggiornamento
-      size_t written = Update.writeStream(tcpClient);
-      if (written > 0 && Update.end()) {
-//waitCTS();
-    //    Serial.println("Aggiornamento completato, riavvio...");
-        ESP.restart();
-      } else {
-waitCTS();
-        Serial.println("Errore durante l'aggiornamento.");
-      }
-   
-  } else {
-waitCTS();
-    Serial.println("Connessione al server fallita!");
+  if(remoteVersion <= FW_VERSION) {
+    waitCTS();
+    Serial.println("Firmware aggiornato, nessuna azione.");
+    return;
+  }
+  waitCTS();
+  Serial.println("Nuova versione disponibile! Avvio OTA...");
+
+  // OTA vero e proprio
+  t_httpUpdate_return ret = ESPhttpUpdate.update(client, bin_url);
+  switch(ret) {
+    case HTTP_UPDATE_OK:
+      waitCTS();
+      Serial.println("OTA completata!");
+      break;
+    case HTTP_UPDATE_FAILED:
+      waitCTS();
+      Serial.printf("Errore OTA %d: %s\n",
+        ESPhttpUpdate.getLastError(),
+        ESPhttpUpdate.getLastErrorString().c_str());
+      break;
+    case HTTP_UPDATE_NO_UPDATES:
+      waitCTS();
+      Serial.println("Nessun aggiornamento trovato.");
+      break;
   }
 }
-}
-else
-{
-waitCTS();
-Serial.println("Firmware aggiornato.");
-}
-//tcpClient.stop();
-}
-
 
 void waitCTS()
 {
@@ -314,7 +322,7 @@ void defaultEEPROM() {
   EEPROM.write(SERVER_PORT_ADDRESS, highByte(LISTEN_PORT));
   EEPROM.write(SERVER_PORT_ADDRESS + 1, lowByte(LISTEN_PORT));
 
-  EEPROM.write(BAUD_ADDRESS, 0x06);
+  EEPROM.write(BAUD_ADDRESS, 0x05);
   EEPROM.write(ECHO_ADDRESS, 0x00);
   EEPROM.write(AUTO_ANSWER_ADDRESS, 0x01);
   EEPROM.write(TELNET_ADDRESS, 0x00);
@@ -331,6 +339,7 @@ void defaultEEPROM() {
   setEEPROM("heatwavebbs.com:9640", speedDialAddresses[5], 50);
   setEEPROM("bbs.retrocampus.com:23", speedDialAddresses[6], 50);
   setEEPROM("telehack.com:23", speedDialAddresses[7], 50);
+  setEEPROM("fi12.bot-hosting.cloud:20918", speedDialAddresses[9], 50);
 
   for (int i = 8; i < 10; i++) {
     setEEPROM("", speedDialAddresses[i], 50);
@@ -455,7 +464,7 @@ void connectWiFi() {
     Serial.print("CONNECTED TO "); Serial.println(WiFi.SSID());
     Serial.print("IP ADDRESS: "); Serial.println(WiFi.localIP());
     updateLed();
-        updateFirmware(CURRENT_VERSION);
+       // updateFirmware(CURRENT_VERSION);
   }
 }
 
@@ -620,7 +629,7 @@ void displayCurrentSettings() {
 
   Serial.println("SPEED DIAL:");
   for (int i = 0; i < 10; i++) {
-    Serial.print(i); Serial.print(": "); Serial.println(speedDials[i]);
+    Serial.print(i); Serial.print(": "); Serial.print(speedDials[i]);(i==9)?Serial.println(" (firmware update) "):Serial.print("");
     yield();
   }
   Serial.println();
@@ -698,6 +707,7 @@ void displayHelp() {
   Serial.println("WIFI OFF/ON...: ATC0 / ATC1"); yield();
   Serial.println("HANGUP........: ATH"); yield();
   Serial.println("ENTER CMD MODE: +++"); yield();
+  Serial.println("FIRMWARE UPDATE: FUPD"); yield();
   Serial.println("EXIT CMD MODE.: ATO"); yield();
   Serial.println("QUERY MOST COMMANDS FOLLOWED BY '?'"); yield();
 }
@@ -711,7 +721,9 @@ void storeSpeedDial(byte num, String location) {
 void welcome() {
   waitCTS();
   Serial.println();
-  Serial.println("WIFI PC128 BUILD " + CURRENT_VERSION + " BY @DINOFLORENZI");
+  Serial.print("WIFI PC128 BUILD "); 
+  Serial.print(FW_VERSION);
+  Serial.println (" BY @DINOFLORENZI");
   Serial.println("BASED ON PAULRICKARDS and");
   Serial.println("GITHUB.COM/JSALIN/ESP8266_MODEM");
 }
@@ -1054,6 +1066,14 @@ void command()
     sendResult(R_OK);
   }
 
+  /**** Firmware update ****/
+  else if (upCmd == "FUPD") {
+    waitCTS();
+  Serial.println("Check for firmware update"); yield();
+    checkUpdate();
+    sendResult(R_OK);
+    waitCTS();
+  }
   /**** Connect WiFi ****/
   else if (upCmd == "ATC1") {
     connectWiFi();
